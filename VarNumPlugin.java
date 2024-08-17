@@ -63,14 +63,18 @@ public class VarNumPlugin extends JavaPlugin implements CommandExecutor {
     }
 
     //функция проверки существования таблицы
-    private boolean doesTableExist(String tableName) {
-        String checkTableSQL = "";
-        if (getConfigData("type-db").equals("SQL")) {
-            checkTableSQL = "SELECT name FROM sqlite_master WHERE type='table' AND name='" + tableName + "';";
-        } else if (getConfigData("type-db").equals("MYSQL")) {
-            checkTableSQL = "SHOW TABLES LIKE '" + tableName + "';";
-        }
-        try (ResultSet rs = connection.createStatement().executeQuery(checkTableSQL);) {
+    private boolean doesTableExist(String tableName) throws SQLException {
+        try {
+            String checkTableSQL = "";
+            if (getConfigData("type-db").equals("SQL")) {
+                checkTableSQL = "SELECT name FROM sqlite_master WHERE type='table' AND name = ?;";
+            } else if (getConfigData("type-db").equals("MYSQL")) {
+                //checkTableSQL = "SHOW TABLES LIKE ?;";
+                checkTableSQL = "SELECT name FROM INFORMATION_SCHEMA.TABLES WHERE name = ?;";
+            }
+            PreparedStatement stmt = connection.prepareStatement(checkTableSQL);
+            stmt.setString(1, tableName);
+            ResultSet rs = stmt.executeQuery(checkTableSQL);
             return rs.next();
         } catch (SQLException e) {
             e.printStackTrace();
@@ -80,11 +84,11 @@ public class VarNumPlugin extends JavaPlugin implements CommandExecutor {
 
     // функция проверки на существование записи о игроке в таблице
     private boolean doesPlayerInTableExist(String tableName, String player) {
-        String playerCheckSQL = "SELECT COUNT(*) FROM " + tableName + " WHERE player = ?;";
-        try (PreparedStatement preparedStatement = connection.prepareStatement(playerCheckSQL)) {
-            preparedStatement.setString(1, player);
-            ResultSet rs = preparedStatement.executeQuery();
-            getLogger().info("Executing query: " + playerCheckSQL);
+        String playerCheckSQL = "SELECT COUNT(*) FROM ? WHERE player = ?;";
+        try (PreparedStatement stmt = connection.prepareStatement(playerCheckSQL)) {
+            stmt.setString(1, tableName);
+            stmt.setString(2, player);
+            ResultSet rs = stmt.executeQuery();
 
             if (rs.next()) {
                 return rs.getInt(1) > 0; // Возвращает true, если игрок найден
@@ -142,9 +146,11 @@ public class VarNumPlugin extends JavaPlugin implements CommandExecutor {
                 String varname = args[1];
                 if (action.equals("create")) {
                     // код создания таблицы в базе данных с именем varmane
-                    String createTableSQL = "CREATE TABLE IF NOT EXISTS " + varname + " (player TEXT, value TEXT);";
+                    String createTableSQL = "CREATE TABLE IF NOT EXISTS ? (player TEXT, value TEXT);";
                     try {
-                        connection.createStatement().executeUpdate(createTableSQL);
+                        PreparedStatement stmt = connection.prepareStatement(createTableSQL);
+                        stmt.setString(1, varname);
+                        stmt.executeUpdate(createTableSQL);
                         sender.sendMessage("[VarNum] New variable '" + varname + "' successfully created");
                         return true;
                     } catch (SQLException e) {
@@ -155,9 +161,11 @@ public class VarNumPlugin extends JavaPlugin implements CommandExecutor {
 
                 if (action.equals("delete")) {
                     // код удаления таблицы в базе данных с именем varmane
-                    String deleteTableSQL = "DROP TABLE IF EXISTS " + varname + ";";
+                    String deleteTableSQL = "DROP TABLE IF EXISTS ?;";
                     try {
-                        connection.createStatement().executeUpdate(deleteTableSQL);
+                        PreparedStatement stmt = connection.prepareStatement(deleteTableSQL);
+                        stmt.setString(1, varname);
+                        stmt.executeUpdate(deleteTableSQL);
                         sender.sendMessage("[VarNum] Variable '" + varname + "' successfully deleted");
                         return true;
                     } catch (SQLException e) {
@@ -176,25 +184,28 @@ public class VarNumPlugin extends JavaPlugin implements CommandExecutor {
 
                 String varname = args[1];
                 String newvarname = args[2];
-                String renameTableSQL = "ALTER TABLE " + varname + " RENAME TO " + newvarname + ";";
+                String renameTableSQL = "ALTER TABLE ? RENAME TO ?;";
 
                 // проверяем существование таблицы
-                if (doesTableExist(varname)) {
-                    if (!doesTableExist(newvarname)) {
-                        try {
+                try {
+                    if (doesTableExist(varname)) {
+                        if (!doesTableExist(newvarname)) {
+                            PreparedStatement stmt = connection.prepareStatement(renameTableSQL);
+                            stmt.setString(1, varname);
+                            stmt.setString(2, newvarname);
                             connection.createStatement().executeUpdate(renameTableSQL);
                             sender.sendMessage("[Varnum] Variable '" + varname + "' has been successfully renamed to '" + newvarname + "'");
                             return true;
-                        } catch (SQLException e) {
-                            e.printStackTrace();
+                        } else {
+                            sender.sendMessage("[Varnum] Variable '" + newvarname + "' already exists");
                             return false;
                         }
                     } else {
-                        sender.sendMessage("[Varnum] Variable '" + newvarname + "' already exists");
+                        sender.sendMessage("[Varnum] The variable '" + varname + "' does not exist");
                         return false;
                     }
-                } else {
-                    sender.sendMessage("[Varnum] The variable '" + varname + "' does not exist");
+                } catch (SQLException e) {
+                    e.printStackTrace();
                     return false;
                 }
             }
@@ -211,55 +222,63 @@ public class VarNumPlugin extends JavaPlugin implements CommandExecutor {
                 String varname = args[1]; //fiftic
 
                 // проверяем существование переменной
-                if (doesTableExist(varname)) {
-                    if (value.equals("delete")) {
-                        // удаление игрока из переменной
-                        if (doesPlayerInTableExist(varname, playername)) {
-                            String deletePlayerFromVar = "DELETE FROM " + varname + " WHERE player = '" + playername + "';";
-                            try (PreparedStatement stmt = connection.prepareStatement(deletePlayerFromVar)) {
-                                stmt.setString(1, playername);
-                                stmt.executeUpdate();
-                                sender.sendMessage("[Varnum] Variable '" + varname + "' of player '" + playername + "' successfully deleted");
-                                return true;
-                            } catch (SQLException e) {
-                                e.printStackTrace();
+                try {
+                    if (doesTableExist(varname)) {
+                        if (value.equals("delete")) {
+                            // удаление игрока из переменной
+                            if (doesPlayerInTableExist(varname, playername)) {
+                                String deletePlayerFromVarSQL = "DELETE FROM " + varname + " WHERE player = '" + playername + "';";
+                                try (PreparedStatement stmt = connection.prepareStatement(deletePlayerFromVarSQL)) {
+                                    stmt.setString(1, playername);
+                                    stmt.executeUpdate();
+                                    sender.sendMessage("[Varnum] Variable '" + varname + "' of player '" + playername + "' successfully deleted");
+                                    return true;
+                                } catch (SQLException e) {
+                                    e.printStackTrace();
+                                    return false;
+                                }
+                            } else {
+                                sender.sendMessage("[VarNum] Player '" + playername + "' does not exist in variable '" + varname + "'");
                                 return false;
                             }
                         } else {
-                            sender.sendMessage("[VarNum] Player '" + playername + "' does not exist in variable '" + varname + "'");
-                            return false;
-                        }
-                    } else {
-                        // попытаемся преобразовать value в число
-                        int intValue = 0;
-                        try {
-                            intValue = Integer.parseInt(value);
-                        } catch (NumberFormatException e) {
-                            sender.sendMessage("[VarNum] Value is not a valid integer.");
-                            return false;
-                        }
-                        String endValue = Integer.toString(intValue);
-                        // устанавливаем значение в переменной varname для игрока
-                        String setValueSQL = "";
-                        if (doesPlayerInTableExist(varname, playername)) {
-                            setValueSQL = "UPDATE " + varname + " SET value = '" + endValue + "' WHERE player = '" + playername +  "';";
-                            sender.sendMessage("1");
-                        } else {
-                            setValueSQL = "INSERT INTO " + varname + " (player, value) VALUES ('" + playername + "' , '" + endValue + "');";
-                            sender.sendMessage("2");
-                        }
-
-                        try (PreparedStatement stmt = connection.prepareStatement(setValueSQL)) {
+                            // попытаемся преобразовать value в число
+                            int intValue = 0;
+                            try {
+                                intValue = Integer.parseInt(value);
+                            } catch (NumberFormatException e) {
+                                sender.sendMessage("[VarNum] Value is not a valid integer.");
+                                return false;
+                            }
+                            String endValue = Integer.toString(intValue);
+                            // устанавливаем значение в переменной varname для игрока
+                            String setValueSQL = "";
+                            PreparedStatement stmt;
+                            if (doesPlayerInTableExist(varname, playername)) {
+                                setValueSQL = "UPDATE ? SET value = ? WHERE player = ?;";
+                                stmt = connection.prepareStatement(setValueSQL);
+                                stmt.setString(1, varname);
+                                stmt.setString(2, endValue);
+                                stmt.setString(3, playername);
+                                sender.sendMessage("1");
+                            } else {
+                                setValueSQL = "INSERT INTO ? (player, value) VALUES (? , ?);";
+                                stmt = connection.prepareStatement(setValueSQL);
+                                stmt.setString(1, varname);
+                                stmt.setString(2, playername);
+                                stmt.setString(3, endValue);
+                                sender.sendMessage("2");
+                            }
                             stmt.executeUpdate();
                             sender.sendMessage("[Varnum] Variable '" + varname + "' for " + playername + " is set to " + value);
                             return true;
-                        } catch (SQLException e) {
-                            e.printStackTrace();
-                            return false;
                         }
+                    } else {
+                        sender.sendMessage("[VarNum] Variable '" + varname + "' does not exist.");
+                        return false;
                     }
-                } else {
-                    sender.sendMessage("[VarNum] Variable '" + varname + "' does not exist.");
+                } catch (SQLException e) {
+                    e.printStackTrace();
                     return false;
                 }
             }
@@ -270,13 +289,14 @@ public class VarNumPlugin extends JavaPlugin implements CommandExecutor {
     }
 
     public static String VarNumPlaceholderValue(String varname, String player) {
-        String getValueSQL = "SELECT value FROM " + varname + " WHERE player = '" + player + "';";
+        String getValueSQL = "SELECT value FROM ? WHERE player = ?;";
         try {
-            connection.prepareStatement(getValueSQL).setString(1, player);
-            ResultSet rs = connection.prepareStatement(getValueSQL).executeQuery();
+            PreparedStatement stmt = connection.prepareStatement(getValueSQL);
+            stmt.setString(1, varname);
+            stmt.setString(2, player);
+            ResultSet rs = stmt.executeQuery();
             while (rs.next()) {
-                String Value = rs.getString("value");
-                return Value;
+                return rs.getString("value");
             }
         } catch (SQLException e) {
             e.printStackTrace();
